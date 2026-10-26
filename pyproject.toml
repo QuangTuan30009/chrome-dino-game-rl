@@ -16,8 +16,8 @@ matplotlib = "^3.7.1"
 tqdm = "^4.65.0"
 
 [tool.pyright]
-venvPath = "/Users/aome510/Library/Caches/pypoetry/virtualenvs/"
-venv = "chrome-dino-game-rl-I4G6ctY3-py3.11"
+venvPath = "."
+venv = ".venv"
 
 [build-system]
 requires = ["poetry-core"]

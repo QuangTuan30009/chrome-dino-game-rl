@@ -22,7 +22,7 @@ BASE_CACTUS_SPAWN_PROB = 0.3
 BIRD_SPAWN_PROB = 0.3
 RENDER_FPS = 15
 COLLISION_THRESHOLD = 20
-DIFFICULTY_INCREASE_FREQ = 20
+DIFFICULTY_INCREASE_FREQ = 30
 
 
 class Action(int, enum.Enum):
@@ -269,7 +269,12 @@ class Env(gym.Env):
         self,
         render_mode: RenderMode | None,
         game_mode: GameMode = GameMode.NORMAL,
-        train_frame_limit=500,  # the upper limit for number of frames during the train mode
+        train_frame_limit=1500,  # the upper limit for number of frames during the train mode
+        # Reward shaping parameters
+        survival_reward: float = 0.01,    # thưởng nhỏ mỗi frame còn sống
+        collision_penalty: float = -5.0,  # phạt khi va chạm chướng ngại vật
+        pass_reward: float = 1.0,         # thưởng khi vượt qua chướng ngại vật
+        terminate_on_collision: bool = True,  # kết thúc episode ngay khi va chạm
     ) -> None:
         # Initialize `gym.Env` required fields
         self.render_mode = render_mode
@@ -282,6 +287,12 @@ class Env(gym.Env):
 
         self._game_mode = game_mode
         self._train_frame_limit = train_frame_limit
+
+        # Reward shaping config
+        self._survival_reward = survival_reward
+        self._collision_penalty = collision_penalty
+        self._pass_reward = pass_reward
+        self._terminate_on_collision = terminate_on_collision
 
         # Initialize `pygame` data
         self._window = None
@@ -330,7 +341,9 @@ class Env(gym.Env):
 
     def step(self, action: Action) -> tuple[np.ndarray, float, bool, bool, dict]:
         terminated = False
-        reward = 0.0
+        collided = False
+        # Survival reward: thưởng nhỏ mỗi frame agent còn sống
+        reward = self._survival_reward
 
         self._frame += 1
         self._obstacle_cnt += self._speed
@@ -354,24 +367,28 @@ class Env(gym.Env):
                 continue
             if o.collide(agent_rect):
                 o.needs_collision_check = False
-                reward -= 1.0
-                if self._game_mode == GameMode.NORMAL:
+                reward += self._collision_penalty
+                collided = True
+                # Kết thúc episode ngay khi va chạm (cả NORMAL lẫn TRAIN nếu cấu hình bật)
+                if self._game_mode == GameMode.NORMAL or self._terminate_on_collision:
                     terminated = True
             else:
-                # Agent passes an obstacle without colliding with the object, give a reward
+                # Agent vượt qua chướng ngại vật, trao phần thưởng pass_reward
                 if agent_rect.left > o.rect.right:
                     o.needs_collision_check = False
-                    reward += 1.0
+                    reward += self._pass_reward
 
-        if self._game_mode == GameMode.TRAIN and self._frame >= self._train_frame_limit:
-            terminated = True
+        # Ở chế độ TRAIN (không terminate on collision), giới hạn frame
+        if self._game_mode == GameMode.TRAIN and not self._terminate_on_collision:
+            if self._frame >= self._train_frame_limit:
+                terminated = True
 
         # Should we spawn a new obstacle?
         self._spawn_obstacle_maybe()
 
         obs = self._render_frame()
 
-        return obs, reward, terminated, False, {}
+        return obs, reward, terminated, False, {"collided": collided}
 
     def _spawn_obstacle_maybe(self):
         if self._obstacle_cnt > max(OBSTACLE_MIN_CNT, JUMP_DURATION * self._speed):
@@ -465,12 +482,15 @@ class Wrapper(gym.Wrapper):
 
         return self._get_obs(), {}
 
-    def step(self, action: Action) -> tuple[np.ndarray, float, bool, bool, dict]:
+    def step(self, action) -> tuple[np.ndarray, float, bool, bool, dict]:
         total_reward = 0.0
         terminated = False
+        truncated = False
+        # Ép kiểu action an toàn: hỗ trợ cả int, Tensor, và Action enum
+        safe_action = Action(int(action))
 
         for _ in range(self.k):
-            obs, reward, term, *_ = self.env.step(action)
+            obs, reward, term, trunc, *_ = self.env.step(safe_action)
             self.frames.append(obs)
             obs = self._transform(obs)
 
@@ -480,12 +500,15 @@ class Wrapper(gym.Wrapper):
             if term:
                 terminated = True
                 break
+            if trunc:
+                truncated = True
+                break
 
-        return self._get_obs(), total_reward, terminated, False, {}
+        return self._get_obs(), total_reward, terminated, truncated, {}
 
 
 register(
     id="Env-v0",
     entry_point="envs:Env",
-    max_episode_steps=300,
+    max_episode_steps=1000 ,
 )

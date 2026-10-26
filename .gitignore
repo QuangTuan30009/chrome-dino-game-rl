@@ -1,3 +1,6 @@
 .python-version
 *.DS_Store
 __pycache__/
+.venv/
+results/
+.vscode/

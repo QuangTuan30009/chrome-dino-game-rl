@@ -4,16 +4,20 @@ import gymnasium as gym
 import os
 import matplotlib.pyplot as plt
 import numpy as np
-from torchvision.utils import torch
+import torch
 import envs
-from play import play_with_model
+from play import play_with_model, load_model
 from tqdm import tqdm
 
 if __name__ == "__main__":
     if not os.path.exists("experiments"):
         os.mkdir("experiments")
 
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")  # type: ignore
+    device = torch.device(
+        "cuda"
+        if torch.cuda.is_available()
+        else ("mps" if torch.backends.mps.is_available() else "cpu")
+    )
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-r", "--result_path")
@@ -22,20 +26,28 @@ if __name__ == "__main__":
     parser.add_argument("-e", "--episodes", type=int, nargs="+")
     parser.add_argument("--save_play", action="store_true")
     parser.add_argument("--save_plot", action="store_true")
+    parser.add_argument(
+        "--model_type", type=str, default="dqn", choices=["dqn", "dueling"],
+        help="Kiến trúc mạng của model cần eval: 'dqn' hoặc 'dueling'"
+    )
     args = parser.parse_args()
 
     env = gym.make("Env-v0", render_mode="rgb_array")
     env = envs.Wrapper(env)
 
+    obs_space = env.observation_space.shape
+    assert obs_space is not None
+    in_channels = obs_space[0]
+    out_channels = env.action_space.n  # type: ignore
+
     progress_bar = tqdm(total=args.n_runs * len(args.episodes), desc="Progress")
 
     avg_rewards = []
     avg_frame_counts = []
-    # Run experiments on models after training for a specific number of episodes
+    # Chạy thực nghiệm trên các model sau khi huấn luyện được N episodes
     for milestone in args.episodes:
         model_path = os.path.join(args.result_path, f"model-{milestone}.pth")
-        policy_net = torch.load(model_path).to(device)
-        policy_net.eval()
+        policy_net = load_model(model_path, args.model_type, in_channels, out_channels, device)
 
         rewards = []
         frame_counts = []
